@@ -2,8 +2,10 @@
 set -euo pipefail
 exec > /var/log/worker-init.log 2>&1
 
-JOIN_BUCKET="${join_bucket}"
-WORKER_ID="${worker_id}"
+META="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
+H="Metadata-Flavor: Google"
+JOIN_BUCKET=$(curl -sf "$META/tf_join_bucket" -H "$H")
+WORKER_ID=$(curl -sf   "$META/tf_worker_id"   -H "$H")
 SPARK_VERSION="3.5.1"
 HADOOP_VERSION="3"
 K8S_VERSION="1.29"

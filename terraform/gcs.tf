@@ -12,7 +12,7 @@ resource "google_storage_bucket_object" "student_dag_folders" {
   for_each = toset(var.students)
   name     = "dags/${each.key}/.keep"
   bucket   = google_storage_bucket.dags.name
-  content  = ""
+  content  = " "
 }
 
 # Bucket bootstrapowy — master zapisuje tu join-command, workerzy go pobierają

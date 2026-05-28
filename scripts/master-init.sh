@@ -2,10 +2,12 @@
 set -euo pipefail
 exec > /var/log/master-init.log 2>&1
 
-PROJECT_ID="${project_id}"
-JOIN_BUCKET="${join_bucket}"
-DAG_BUCKET="${dag_bucket}"
-STUDENTS='${students_json}'
+META="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
+H="Metadata-Flavor: Google"
+PROJECT_ID=$(curl -sf "$META/tf_project_id" -H "$H")
+JOIN_BUCKET=$(curl -sf "$META/tf_join_bucket" -H "$H")
+DAG_BUCKET=$(curl -sf  "$META/tf_dag_bucket"  -H "$H")
+STUDENTS=$(curl -sf    "$META/tf_students"     -H "$H")
 
 K8S_VERSION="1.29"
 SPARK_VERSION="3.5.1"
@@ -20,7 +22,7 @@ log "Aktualizacja systemu..."
 apt-get update -qq
 apt-get install -y -qq curl wget gnupg2 apt-transport-https ca-certificates \
   software-properties-common openjdk-17-jdk python3-pip python3-venv \
-  git nfs-common gcsfuse
+  git nfs-common
 
 # ── 2. containerd ──────────────────────────────────────────────────────────────
 log "Instalacja containerd..."
@@ -176,17 +178,14 @@ PYEOF
 helm upgrade --install airflow apache-airflow/airflow \
   --namespace airflow \
   --version "1.13.1" \
-  --set "webserver.service.type=NodePort" \
-  --set "webserver.service.nodePort=30080" \
-  --set "config.core.dags_folder=/opt/airflow/dags" \
+  --set "executor=LocalExecutor" \
   --set "dags.gitSync.enabled=false" \
   --set "dags.persistence.enabled=false" \
-  --set "executor=LocalExecutor" \
-  --set "data.metadataConnection.host=airflow-postgresql" \
   --set "postgresql.enabled=true" \
   --set "redis.enabled=false" \
   --set "env[0].name=AIRFLOW__CORE__LOAD_EXAMPLES" \
-  --set "env[0].value=False" \
+  --set-string "env[0].value=False" \
+  --set "webserver.service.type=ClusterIP" \
   --timeout 10m \
   --wait
 

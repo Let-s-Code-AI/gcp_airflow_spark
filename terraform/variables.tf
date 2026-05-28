@@ -52,5 +52,5 @@ variable "allowed_cidr" {
 variable "ssh_pub_key_path" {
   description = "Ścieżka do publicznego klucza SSH"
   type        = string
-  default     = "~/.ssh/id_rsa.pub"
+  default     = "~/.ssh/id_ed25519.pub"
 }

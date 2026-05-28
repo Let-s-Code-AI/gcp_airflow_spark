@@ -31,9 +31,11 @@ resource "google_compute_instance" "master" {
   tags         = ["course-node"]
 
   scheduling {
-    preemptible         = true
-    automatic_restart   = false
-    on_host_maintenance = "TERMINATE"
+    on_host_maintenance         = "TERMINATE"
+    automatic_restart           = false
+    preemptible                 = true
+    provisioning_model          = "SPOT"
+    instance_termination_action = "STOP"
   }
 
   boot_disk {
@@ -55,12 +57,11 @@ resource "google_compute_instance" "master" {
   }
 
   metadata = merge(local.common_metadata, {
-    startup-script = templatefile("${path.module}/../scripts/master-init.sh", {
-      project_id    = var.project_id
-      join_bucket   = local.join_bucket
-      dag_bucket    = local.dag_bucket
-      students_json = jsonencode(var.students)
-    })
+    startup-script = file("${path.module}/../scripts/master-init.sh")
+    tf_project_id  = var.project_id
+    tf_join_bucket = local.join_bucket
+    tf_dag_bucket  = local.dag_bucket
+    tf_students    = jsonencode(var.students)
   })
 
   depends_on = [
@@ -79,9 +80,11 @@ resource "google_compute_instance" "worker" {
   tags         = ["course-node"]
 
   scheduling {
-    preemptible         = true
-    automatic_restart   = false
-    on_host_maintenance = "TERMINATE"
+    on_host_maintenance         = "TERMINATE"
+    automatic_restart           = false
+    preemptible                 = true
+    provisioning_model          = "SPOT"
+    instance_termination_action = "STOP"
   }
 
   boot_disk {
@@ -103,10 +106,9 @@ resource "google_compute_instance" "worker" {
   }
 
   metadata = merge(local.common_metadata, {
-    startup-script = templatefile("${path.module}/../scripts/worker-join.sh", {
-      join_bucket = local.join_bucket
-      worker_id   = count.index + 1
-    })
+    startup-script = file("${path.module}/../scripts/worker-join.sh")
+    tf_join_bucket = local.join_bucket
+    tf_worker_id   = tostring(count.index + 1)
   })
 
   depends_on = [google_compute_instance.master]
