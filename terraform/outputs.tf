@@ -8,7 +8,7 @@ output "master_internal_ip" {
 }
 
 output "worker_internal_ips" {
-  value = [for w in google_compute_instance.worker : w.network_interface[0].network_ip]
+  value = { for k, w in google_compute_instance.worker : "worker-${k} (${w.zone})" => w.network_interface[0].network_ip }
 }
 
 output "dag_bucket" {

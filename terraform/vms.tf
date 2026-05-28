@@ -72,11 +72,18 @@ resource "google_compute_instance" "master" {
 }
 
 # ── Worker nodes (Spark + Airflow workery) ────────────────────────────────────
+locals {
+  worker_config = {
+    "1" = { region = "europe-west4",    zone = "europe-west4-a" }
+    "2" = { region = "europe-central2", zone = "europe-central2-a" }
+  }
+}
+
 resource "google_compute_instance" "worker" {
-  count        = 2
-  name         = "${var.course_name}-worker-${count.index + 1}"
+  for_each     = local.worker_config
+  name         = "${var.course_name}-worker-${each.key}"
   machine_type = var.worker_machine_type
-  zone         = var.zone
+  zone         = each.value.zone
   tags         = ["course-node"]
 
   scheduling {
@@ -90,14 +97,14 @@ resource "google_compute_instance" "worker" {
   boot_disk {
     initialize_params {
       image = "ubuntu-os-cloud/ubuntu-2204-lts"
-      size  = 100 # miejsce dla Spark shuffle i danych
+      size  = 100
       type  = "pd-balanced"
     }
   }
 
   network_interface {
-    subnetwork = google_compute_subnetwork.subnet.id
-    # bez publicznego IP — dostęp przez NAT lub SSH przez mastera
+    subnetwork = google_compute_subnetwork.worker_subnet[each.value.region].id
+    # bez publicznego IP — dostęp przez NAT
   }
 
   service_account {
@@ -108,8 +115,11 @@ resource "google_compute_instance" "worker" {
   metadata = merge(local.common_metadata, {
     startup-script = file("${path.module}/../scripts/worker-join.sh")
     tf_join_bucket = local.join_bucket
-    tf_worker_id   = tostring(count.index + 1)
+    tf_worker_id   = each.key
   })
 
-  depends_on = [google_compute_instance.master]
+  depends_on = [
+    google_compute_instance.master,
+    google_compute_router_nat.worker_nat,
+  ]
 }
