@@ -151,45 +151,110 @@ systemctl start spark-master
 SPARK_MASTER_IP=$(hostname -I | awk '{print $1}')
 echo "spark://$SPARK_MASTER_IP:7077" | gsutil cp - "gs://$JOIN_BUCKET/spark-master-url"
 
-# ── 9. Airflow via Helm ────────────────────────────────────────────────────────
-log "Instalacja Apache Airflow via Helm..."
+# ── 9. Postgres (oficjalny obraz, bundled bitnami ma broken tagi) ──────────────
+log "Stawianie Postgres..."
 kubectl create namespace airflow
 
+kubectl apply -n airflow -f - <<'EOF'
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: postgres
+spec:
+  selector:
+    matchLabels:
+      app: postgres
+  serviceName: postgres
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+      - name: postgres
+        image: postgres:15-alpine
+        env:
+        - name: POSTGRES_USER
+          value: airflow
+        - name: POSTGRES_PASSWORD
+          value: airflow
+        - name: POSTGRES_DB
+          value: airflow
+        ports:
+        - containerPort: 5432
+        volumeMounts:
+        - name: data
+          mountPath: /var/lib/postgresql/data
+  volumeClaimTemplates:
+  - metadata:
+      name: data
+    spec:
+      accessModes: [ReadWriteOnce]
+      resources:
+        requests:
+          storage: 5Gi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector:
+    app: postgres
+  ports:
+  - port: 5432
+EOF
+
+log "Czekam na Postgres..."
+until kubectl wait pod -n airflow -l app=postgres --for=condition=Ready --timeout=120s 2>/dev/null; do sleep 5; done
+POSTGRES_IP=$(kubectl get svc postgres -n airflow -o jsonpath='{.spec.clusterIP}')
+log "Postgres gotowy: $POSTGRES_IP"
+
+# ── 10. Airflow via Helm (1.15.0 + zewnętrzny postgres) ───────────────────────
+log "Instalacja Apache Airflow via Helm..."
 helm repo add apache-airflow https://airflow.apache.org
 helm repo update
 
-# Wygeneruj users yaml dla Helm
-USERS_YAML=$(python3 <<PYEOF
-import json, sys
-students = json.loads('$STUDENTS')
-lines = []
-for s in students:
-    lines.append(f"""  - username: {s}
-    password: {s}Pass123!
-    role: User
-    email: {s}@course.local
-    firstName: {s}
-    lastName: Student""")
-print("users:")
-print("\n".join(lines))
-PYEOF
-)
-
-helm upgrade --install airflow apache-airflow/airflow \
+helm install airflow apache-airflow/airflow \
   --namespace airflow \
-  --version "1.13.1" \
+  --version "1.15.0" \
   --set "executor=LocalExecutor" \
   --set "dags.gitSync.enabled=false" \
   --set "dags.persistence.enabled=false" \
-  --set "postgresql.enabled=true" \
+  --set "postgresql.enabled=false" \
   --set "redis.enabled=false" \
+  --set "data.metadataConnection.user=airflow" \
+  --set "data.metadataConnection.pass=airflow" \
+  --set "data.metadataConnection.host=$POSTGRES_IP" \
+  --set "data.metadataConnection.port=5432" \
+  --set "data.metadataConnection.db=airflow" \
+  --set "data.metadataConnection.protocol=postgresql" \
   --set "env[0].name=AIRFLOW__CORE__LOAD_EXAMPLES" \
   --set-string "env[0].value=False" \
   --set "webserver.service.type=ClusterIP" \
-  --timeout 10m \
+  --timeout 12m \
   --wait
 
-# Stwórz konta studentów
+# ── 11. NodePort — Airflow UI na porcie 30080 ──────────────────────────────────
+log "Wystawianie Airflow UI przez NodePort :30080..."
+kubectl apply -n airflow -f - <<'EOF'
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-webserver-nodeport
+spec:
+  type: NodePort
+  selector:
+    component: webserver
+    release: airflow
+  ports:
+  - port: 8080
+    targetPort: 8080
+    nodePort: 30080
+EOF
+
+# ── 12. Konta studentów ────────────────────────────────────────────────────────
 log "Tworzenie kont studentów w Airflow..."
 AIRFLOW_POD=$(kubectl get pod -n airflow -l component=webserver -o jsonpath='{.items[0].metadata.name}')
 python3 -c "
@@ -200,31 +265,14 @@ for s in students:
         'kubectl', 'exec', '-n', 'airflow', '$AIRFLOW_POD', '--',
         'airflow', 'users', 'create',
         '--username', s,
-        '--password', f'{s}Pass123!',
+        '--password', s + 'Pass123!',
         '--role', 'User',
-        '--email', f'{s}@course.local',
+        '--email', s + '@course.local',
         '--firstname', s,
         '--lastname', 'Student'
     ], check=False)
+print(f'Utworzono {len(students)} kont studentów')
 "
-
-# ── 10. NodePort żeby Airflow UI było dostępne ─────────────────────────────────
-log "Konfiguracja dostępu do Airflow UI na porcie 8080..."
-cat <<'EOF' | kubectl apply -f -
-apiVersion: v1
-kind: Service
-metadata:
-  name: airflow-webserver-external
-  namespace: airflow
-spec:
-  type: NodePort
-  selector:
-    component: webserver
-  ports:
-  - port: 8080
-    targetPort: 8080
-    nodePort: 30080
-EOF
 
 # ── Gotowe ─────────────────────────────────────────────────────────────────────
 EXTERNAL_IP=$(curl -sf "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip" \

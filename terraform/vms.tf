@@ -31,11 +31,10 @@ resource "google_compute_instance" "master" {
   tags         = ["course-node"]
 
   scheduling {
-    on_host_maintenance         = "TERMINATE"
-    automatic_restart           = false
-    preemptible                 = true
-    provisioning_model          = "SPOT"
-    instance_termination_action = "STOP"
+    on_host_maintenance = "MIGRATE"
+    automatic_restart   = true
+    preemptible         = false
+    provisioning_model  = "STANDARD"
   }
 
   boot_disk {
@@ -87,11 +86,10 @@ resource "google_compute_instance" "worker" {
   tags         = ["course-node"]
 
   scheduling {
-    on_host_maintenance         = "TERMINATE"
-    automatic_restart           = false
-    preemptible                 = true
-    provisioning_model          = "SPOT"
-    instance_termination_action = "STOP"
+    on_host_maintenance = "MIGRATE"
+    automatic_restart   = true
+    preemptible         = false
+    provisioning_model  = "STANDARD"
   }
 
   boot_disk {
