@@ -71,7 +71,7 @@ resource "google_compute_firewall" "allow_ui" {
 
   allow {
     protocol = "tcp"
-    ports    = ["22", "8080", "7077", "4040", "6443", "30080"]
+    ports    = ["22", "8080", "8181", "7077", "4040", "6443", "15002", "30080", "30088"]
   }
 
   source_ranges = [var.allowed_cidr]

@@ -6,8 +6,6 @@ META="http://metadata.google.internal/computeMetadata/v1/instance/attributes"
 H="Metadata-Flavor: Google"
 JOIN_BUCKET=$(curl -sf "$META/tf_join_bucket" -H "$H")
 WORKER_ID=$(curl -sf   "$META/tf_worker_id"   -H "$H")
-SPARK_VERSION="3.5.1"
-HADOOP_VERSION="3"
 K8S_VERSION="1.29"
 
 log() { echo "[$(date '+%H:%M:%S')] worker-$WORKER_ID: $*"; }
@@ -16,7 +14,7 @@ log() { echo "[$(date '+%H:%M:%S')] worker-$WORKER_ID: $*"; }
 log "Aktualizacja systemu..."
 apt-get update -qq
 apt-get install -y -qq curl wget gnupg2 apt-transport-https ca-certificates \
-  software-properties-common openjdk-17-jdk
+  software-properties-common nfs-common
 
 # ── 2. containerd ──────────────────────────────────────────────────────────────
 log "Instalacja containerd..."
@@ -76,55 +74,4 @@ chmod +x /tmp/join-command.sh
 log "Dołączanie do klastra K8s..."
 bash /tmp/join-command.sh
 
-# ── 5. Apache Spark Worker ────────────────────────────────────────────────────
-log "Instalacja Apache Spark $SPARK_VERSION..."
-SPARK_TGZ="spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}.tgz"
-wget -q "https://archive.apache.org/dist/spark/spark-${SPARK_VERSION}/$SPARK_TGZ" -P /tmp
-tar -xzf "/tmp/$SPARK_TGZ" -C /opt
-ln -s "/opt/spark-${SPARK_VERSION}-bin-hadoop${HADOOP_VERSION}" /opt/spark
-
-# Pobierz adres Spark mastera
-log "Oczekiwanie na adres Spark mastera..."
-for i in $(seq 1 30); do
-  if gsutil -q stat "gs://$JOIN_BUCKET/spark-master-url" 2>/dev/null; then
-    break
-  fi
-  sleep 10
-done
-
-SPARK_MASTER_URL=$(gsutil cat "gs://$JOIN_BUCKET/spark-master-url")
-
-cat <<EOF > /opt/spark/conf/spark-env.sh
-export JAVA_HOME=/usr/lib/jvm/java-17-openjdk-amd64
-export SPARK_MASTER_HOST=$SPARK_MASTER_URL
-export SPARK_WORKER_CORES=3
-export SPARK_WORKER_MEMORY=12g
-export SPARK_LOG_DIR=/var/log/spark
-EOF
-
-mkdir -p /var/log/spark /tmp/spark-events
-chmod 777 /var/log/spark /tmp/spark-events
-
-MASTER_IP=$(echo "$SPARK_MASTER_URL" | sed 's|spark://||' | cut -d: -f1)
-
-cat <<EOF > /etc/systemd/system/spark-worker.service
-[Unit]
-Description=Apache Spark Worker $WORKER_ID
-After=network.target
-
-[Service]
-Type=forking
-User=root
-ExecStart=/opt/spark/sbin/start-worker.sh $SPARK_MASTER_URL
-ExecStop=/opt/spark/sbin/stop-worker.sh
-Restart=on-failure
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-systemctl daemon-reload
-systemctl enable spark-worker
-systemctl start spark-worker
-
-log "Worker $WORKER_ID gotowy. K8s + Spark worker uruchomiony."
+log "Worker $WORKER_ID gotowy. K8s worker uruchomiony."
