@@ -20,14 +20,14 @@ variable "course_name" {
   default = "airflow-spark-course"
 }
 
-variable "students" {
-  description = "Lista loginów studentów — tworzone jako konta Airflow"
+variable "analitycy" {
+  description = "Lista loginów analityków — tworzone jako konta Airflow"
   type        = list(string)
   default = [
-    "student01", "student02", "student03", "student04",
-    "student05", "student06", "student07", "student08",
-    "student09", "student10", "student11", "student12",
-    "student13", "student14", "student15", "student16"
+    "analityk01", "analityk02", "analityk03", "analityk04",
+    "analityk05", "analityk06", "analityk07", "analityk08",
+    "analityk09", "analityk10", "analityk11", "analityk12",
+    "analityk13", "analityk14", "analityk15", "analityk16"
   ]
 }
 

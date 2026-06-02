@@ -40,4 +40,4 @@ echo "Klaster gotowy!"
 terraform output
 echo "===================================="
 echo "Airflow admin: admin / admin"
-echo "Studenci: student01-16 / studentXXPass123!"
+echo "Analitycy: analityk01-16 / analitykXXPass123!"

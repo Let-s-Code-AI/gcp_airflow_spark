@@ -1,0 +1,86 @@
+# JupyterHub — konfiguracja dla kursu Airflow + Spark
+# Logowanie: analityk01..16, wspólne hasło kursu
+
+hub:
+  config:
+    DummyAuthenticator:
+      password: "CHANGE_ME"
+    JupyterHub:
+      authenticator_class: dummy
+  extraConfig:
+    allowlist: |
+      c.Authenticator.allowed_users = {
+        'analityk01','analityk02','analityk03','analityk04',
+        'analityk05','analityk06','analityk07','analityk08',
+        'analityk09','analityk10','analityk11','analityk12',
+        'analityk13','analityk14','analityk15','analityk16',
+        'admin'
+      }
+
+proxy:
+  service:
+    type: NodePort
+    nodePorts:
+      http: 30088
+
+singleuser:
+  image:
+    name: quay.io/jupyter/scipy-notebook
+    tag: "latest"
+    pullPolicy: IfNotPresent
+
+  # Airflow dostępny wewnątrz klastra — analitycy używają zmiennej AIRFLOW_HOST
+  extraEnv:
+    AIRFLOW_HOST: "http://airflow-webserver.airflow.svc.cluster.local:8080"
+    AIRFLOW_USER: "admin"
+    # Analitycy mogą używać też swoich kont Airflow:
+    # curl -u analityk01:CHANGE_ME $AIRFLOW_HOST/api/v1/dags
+
+  storage:
+    capacity: 2Gi
+    dynamic:
+      storageClass: local-path
+    extraVolumes:
+      - name: airflow-dags
+        persistentVolumeClaim:
+          claimName: airflow-dags-pvc
+    extraVolumeMounts:
+      - name: airflow-dags
+        mountPath: /home/jovyan/airflow-dags
+
+  lifecycleHooks:
+    postStart:
+      exec:
+        command:
+          - "sh"
+          - "-c"
+          - |
+            pip install -q apache-airflow-client requests 2>&1 | tail -2
+            mkdir -p /home/jovyan/airflow-dags/${JUPYTERHUB_USER}
+            ln -sfn /home/jovyan/airflow-dags/${JUPYTERHUB_USER} /home/jovyan/dags
+
+  # Zasoby per analityk — dostosuj do rozmiaru maszyn
+  cpu:
+    limit: 1
+    guarantee: 0.25
+  memory:
+    limit: 2G
+    guarantee: 512M
+
+  startTimeout: 120
+
+scheduling:
+  userScheduler:
+    enabled: false   # mały klaster — wyłączone
+
+# Wyłącz nieużywane komponenty
+prePuller:
+  hook:
+    enabled: false
+  continuous:
+    enabled: false
+
+cull:
+  enabled: true
+  timeout: 3600    # serwery nieaktywne 1h są usuwane
+  every: 300

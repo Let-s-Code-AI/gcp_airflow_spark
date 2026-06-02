@@ -7,9 +7,9 @@ resource "google_storage_bucket" "dags" {
   depends_on                  = [google_project_service.apis]
 }
 
-# Folder per student
-resource "google_storage_bucket_object" "student_dag_folders" {
-  for_each = toset(var.students)
+# Folder per analityk
+resource "google_storage_bucket_object" "analityk_dag_folders" {
+  for_each = toset(var.analitycy)
   name     = "dags/${each.key}/.keep"
   bucket   = google_storage_bucket.dags.name
   content  = " "

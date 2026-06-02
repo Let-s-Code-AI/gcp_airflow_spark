@@ -1,6 +1,6 @@
 # Terraform
+.terraform/
 terraform/.terraform/
-terraform/.terraform.lock.hcl
 terraform/terraform.tfstate
 terraform/terraform.tfstate.backup
 terraform/*.tfplan
@@ -18,6 +18,26 @@ terraform/*_override.tf.json
 service-account*.json
 credentials*.json
 gcp-key*.json
+
+# Datasets (may contain sensitive data)
+Datasets/
+
+# Playwright MCP session files
+.playwright-mcp/
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# Helm — generated/downloaded chart dependencies
+helm/**/charts/
+helm/**/Chart.lock
+
+# Kubernetes secrets
+*-secret.yaml
+*-secret.yml
+secrets.yaml
+secrets.yml
 
 # OS
 .DS_Store

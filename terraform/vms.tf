@@ -60,7 +60,7 @@ resource "google_compute_instance" "master" {
     tf_project_id  = var.project_id
     tf_join_bucket = local.join_bucket
     tf_dag_bucket  = local.dag_bucket
-    tf_students    = jsonencode(var.students)
+    tf_analitycy    = jsonencode(var.analitycy)
   })
 
   depends_on = [
