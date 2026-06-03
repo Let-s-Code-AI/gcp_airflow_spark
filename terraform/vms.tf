@@ -4,16 +4,17 @@ resource "google_service_account" "vm_sa" {
   depends_on   = [google_project_service.apis]
 }
 
-resource "google_project_iam_member" "vm_sa_roles" {
-  for_each = toset([
-    "roles/storage.objectAdmin",
-    "roles/logging.logWriter",
-    "roles/monitoring.metricWriter",
-  ])
-  project = var.project_id
-  role    = each.key
-  member  = "serviceAccount:${google_service_account.vm_sa.email}"
-}
+# IAM roles przypisane ręcznie (gcloud) ze względu na ograniczenia uprawień
+# resource "google_project_iam_member" "vm_sa_roles" {
+#   for_each = toset([
+#     "roles/storage.objectAdmin",
+#     "roles/logging.logWriter",
+#     "roles/monitoring.metricWriter",
+#   ])
+#   project = var.project_id
+#   role    = each.key
+#   member  = "serviceAccount:${google_service_account.vm_sa.email}"
+# }
 
 locals {
   ssh_pub_key = file(pathexpand(var.ssh_pub_key_path))
@@ -71,7 +72,6 @@ resource "google_compute_instance" "master" {
   depends_on = [
     google_storage_bucket.bootstrap,
     google_storage_bucket.dags,
-    google_project_iam_member.vm_sa_roles,
   ]
 }
 
