@@ -8,6 +8,7 @@ Zautomatyzowana infrastruktura kursu Apache Airflow na Kubernetes w Google Cloud
 
 - [Architektura](#architektura)
 - [Wymagania](#wymagania)
+- [Konfiguracja sekretów](#konfiguracja-sekretów)
 - [Quickstart](#quickstart)
 - [Struktura projektu](#struktura-projektu)
 - [Zarządzanie infrastrukturą](#zarządzanie-infrastrukturą)
@@ -76,13 +77,80 @@ Zautomatyzowana infrastruktura kursu Apache Airflow na Kubernetes w Google Cloud
 
 ---
 
-## 🚀 Quickstart
+## 🔐 Konfiguracja sekretów
 
-### 1. Konfiguracja
+### ⚠️ Nigdy nie commituj rzeczywistych haseł do repozytorium!
+
+Wszystkie hasła i dane wrażliwe przechowuj w pliku `.env`, który jest dodany do `.gitignore`.
+
+### Konfiguracja
 
 ```bash
-export PROJECT_ID="moj-projekt-gcp"
-export REGION="europe-west1"
+# 1. Skopiuj plik szablonowy
+cp .env.example .env
+
+# 2. Edytuj .env i wstaw rzeczywiste hasła
+vim .env
+
+# 3. Załaduj zmienne do bieżącej sesji
+source .env
+
+# 4. Weryfikacja
+echo $AIRFLOW_ADMIN_PASSWORD
+```
+
+### Zawartość `.env`
+
+| Zmienna | Opis | Przykład |
+|---------|------|---------|
+| `PROJECT_ID` | GCP Project ID | `my-gcp-project` |
+| `REGION` | Region GCP | `europe-west1` |
+| `ZONE` | Strefa GCP | `europe-west1-b` |
+| `AIRFLOW_ADMIN_PASSWORD` | Hasło admina Airflow | Silne hasło min. 12 znaków |
+| `AIRFLOW_ANALYST_PASSWORD` | Hasło dla analityków | Silne hasło min. 12 znaków |
+| `JUPYTERHUB_ADMIN_PASSWORD` | Hasło admina JupyterHub | Silne hasło min. 12 znaków |
+| `JUPYTERHUB_ANALYST_PASSWORD` | Hasło dla analityków w JupyterHub | Silne hasło min. 12 znaków |
+| `GRAFANA_ADMIN_PASSWORD` | Hasło admina Grafana | Silne hasło min. 12 znaków |
+
+### Bezpieczeństwo
+
+✅ **Dobrze:**
+- Hasła w `.env` (lokalnie)
+- `.env` w `.gitignore`
+- Różne hasła dla każdej roli
+- Silne hasła min. 12 znaków
+
+❌ **Źle:**
+- Hasła w kodzie
+- Hasła w README
+- Hasła w commitach Git
+- Wspólne hasła dla wszystkich
+
+---
+
+## 🚀 Quickstart
+
+### 1. Konfiguracja zmiennych środowiskowych
+
+```bash
+# Skopiuj plik z konfiguracją
+cp .env.example .env
+
+# Edytuj .env i wstaw rzeczywiste hasła
+vim .env
+```
+
+Wymagane zmienne w `.env`:
+- `PROJECT_ID` — GCP Project ID
+- `REGION` — region GCP
+- `AIRFLOW_ADMIN_PASSWORD` — hasło do admina Airflow
+- `AIRFLOW_ANALYST_PASSWORD` — hasło dla kont analityków
+- `JUPYTERHUB_ADMIN_PASSWORD` — hasło admin JupyterHub
+- `GRAFANA_ADMIN_PASSWORD` — hasło admin Grafana
+
+```bash
+# Załaduj zmienne
+source .env
 ```
 
 ### 2. Deploy infrastruktury
@@ -101,9 +169,9 @@ terraform output
 ```
 
 Otrzymasz:
-- **Airflow UI**: `http://<MASTER_IP>:30080` (admin/Spark@Adm1n2024!)
-- **JupyterHub**: `http://<MASTER_IP>:30088` (analityk01-16/JupyterCourse2024!)
-- **Grafana**: `http://<MASTER_IP>:30300` (admin/Gr@fana#K8s$2024!xQ)
+- **Airflow UI**: `http://<MASTER_IP>:30080` (admin / hasło z `$AIRFLOW_ADMIN_PASSWORD`)
+- **JupyterHub**: `http://<MASTER_IP>:30088` (analityk01-16 / hasło z `$JUPYTERHUB_ANALYST_PASSWORD`)
+- **Grafana**: `http://<MASTER_IP>:30300` (admin / hasło z `$GRAFANA_ADMIN_PASSWORD`)
 - **SSH**: `ssh ubuntu@<MASTER_IP>`
 
 ### 4. Upload DAGów
@@ -213,7 +281,7 @@ Domyślne wartości w `terraform/variables.tf`:
 
 16 kont analityków: `analityk01` — `analityk16`
 
-- **Hasło**: `{username}Pass123!` (np. `analityk01Pass123!`)
+- **Hasło**: Ustaw w zmiennej `$AIRFLOW_ANALYST_PASSWORD` (w pliku `.env`)
 - **Rola**: `User` (dostęp do UI + DAGów w przydzielonym katalogu)
 - **Izolacja**: Każdy analityk widzi tylko swoje DAGi (RBAC przez `access_control`)
 
@@ -224,15 +292,15 @@ Każdy użytkownik ma własną rolę o nazwie jak username (np. `analityk01`), k
 ### JupyterHub
 
 - **Użytkownicy**: admin + analityk01-16
-- **Hasło**: `JupyterCourse2024!` (wspólne)
+- **Hasło**: Ustaw w zmiennej `$JUPYTERHUB_ADMIN_PASSWORD` i `$JUPYTERHUB_ANALYST_PASSWORD` (w pliku `.env`)
 - **Authenticator**: DummyAuthenticator
 - **Home**: `/home/jovyan/` (storage: 2 Gi, local-path)
 - **Integracja**: Symlink do `/home/jovyan/airflow-dags/{username}`
 
 ### Admin
 
-- **Airflow admin**: `admin` / `Spark@Adm1n2024!`
-- **Grafana admin**: `admin` / `Gr@fana#K8s$2024!xQ`
+- **Airflow admin**: `admin` / `$AIRFLOW_ADMIN_PASSWORD` (zmienna w `.env`)
+- **Grafana admin**: `admin` / `$GRAFANA_ADMIN_PASSWORD` (zmienna w `.env`)
 
 ---
 

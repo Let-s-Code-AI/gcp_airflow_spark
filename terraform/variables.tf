@@ -54,3 +54,33 @@ variable "ssh_pub_key_path" {
   type        = string
   default     = "~/.ssh/id_ed25519.pub"
 }
+
+variable "airflow_admin_password" {
+  description = "Hasło admina Airflow"
+  type        = string
+  sensitive   = true
+}
+
+variable "airflow_analyst_password" {
+  description = "Hasło dla analityków w Airflow"
+  type        = string
+  sensitive   = true
+}
+
+variable "jupyterhub_admin_password" {
+  description = "Hasło admina JupyterHub"
+  type        = string
+  sensitive   = true
+}
+
+variable "jupyterhub_analyst_password" {
+  description = "Hasło dla analityków w JupyterHub"
+  type        = string
+  sensitive   = true
+}
+
+variable "grafana_admin_password" {
+  description = "Hasło admina Grafana"
+  type        = string
+  sensitive   = true
+}

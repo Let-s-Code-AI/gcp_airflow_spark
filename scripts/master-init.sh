@@ -8,6 +8,11 @@ PROJECT_ID=$(curl -sf "$META/tf_project_id" -H "$H")
 JOIN_BUCKET=$(curl -sf "$META/tf_join_bucket" -H "$H")
 DAG_BUCKET=$(curl -sf  "$META/tf_dag_bucket"  -H "$H")
 ANALITYCY=$(curl -sf    "$META/tf_analitycy"     -H "$H")
+AIRFLOW_ADMIN_PASSWORD=$(curl -sf "$META/tf_airflow_admin_password" -H "$H")
+AIRFLOW_ANALYST_PASSWORD=$(curl -sf "$META/tf_airflow_analyst_password" -H "$H")
+JUPYTERHUB_ADMIN_PASSWORD=$(curl -sf "$META/tf_jupyterhub_admin_password" -H "$H")
+JUPYTERHUB_ANALYST_PASSWORD=$(curl -sf "$META/tf_jupyterhub_analyst_password" -H "$H")
+GRAFANA_ADMIN_PASSWORD=$(curl -sf "$META/tf_grafana_admin_password" -H "$H")
 
 K8S_VERSION="1.29"
 AIRFLOW_VERSION="2.9.1"
@@ -264,7 +269,7 @@ helm install airflow-green apache-airflow/airflow \
   --set "webserver.defaultUser.enabled=true" \
   --set "webserver.defaultUser.role=Admin" \
   --set "webserver.defaultUser.username=admin" \
-  --set "webserver.defaultUser.password=${ADMIN_PASSWORD}" \
+  --set "webserver.defaultUser.password=$AIRFLOW_ADMIN_PASSWORD" \
   --set "webserver.defaultUser.email=admin@course.local" \
   --set "webserver.defaultUser.firstName=Admin" \
   --set "webserver.defaultUser.lastName=Instructor" \
@@ -303,6 +308,7 @@ import json, os, subprocess
 
 analitycy = json.loads(os.environ["ANALITYCY"])
 airflow_pod = os.environ["AIRFLOW_POD"]
+analyst_password = os.environ.get("AIRFLOW_ANALYST_PASSWORD", "defaultPass123!")
 
 def kexec(*cmd):
     return subprocess.run(
@@ -386,7 +392,7 @@ with DAG(
 for s in analitycy:
     # Konto użytkownika (rola User = dostęp do UI)
     kexec("airflow", "users", "create",
-          "--username", s, "--password", s + "Pass123!",
+          "--username", s, "--password", analyst_password,
           "--role", "User",
           "--email", s + "@course.local",
           "--firstname", s, "--lastname", "Analityk")
@@ -404,7 +410,7 @@ for s in analitycy:
 print(f"Skonfigurowano {len(analitycy)} analityków z izolowanymi DAGami")
 PYEOF
 
-ANALITYCY="$ANALITYCY" AIRFLOW_POD="$AIRFLOW_POD" python3 /tmp/setup_analitycy.py
+ANALITYCY="$ANALITYCY" AIRFLOW_POD="$AIRFLOW_POD" AIRFLOW_ANALYST_PASSWORD="$AIRFLOW_ANALYST_PASSWORD" python3 /tmp/setup_analitycy.py
 
 # ── 13. JupyterHub via Helm ───────────────────────────────────────────────────
 log "Instalacja JupyterHub..."
@@ -417,7 +423,7 @@ JUPYTERHUB_VALUES=$(cat <<JHVALUES
 hub:
   config:
     DummyAuthenticator:
-      password: "JupyterCourse2024!"
+      password: "$JUPYTERHUB_ANALYST_PASSWORD"
     JupyterHub:
       authenticator_class: dummy
   extraConfig:
@@ -507,9 +513,9 @@ log "Instalacja stosu monitoringu (Prometheus + Grafana + OTel + Loki)..."
 
 kubectl create namespace monitoring
 
-cat <<'EOF' > /tmp/kube-prometheus-values.yaml
+cat <<EOF > /tmp/kube-prometheus-values.yaml
 grafana:
-  adminPassword: "Gr@fana#K8s$2024!xQ"
+  adminPassword: "$GRAFANA_ADMIN_PASSWORD"
   service:
     type: NodePort
     nodePort: 30300
