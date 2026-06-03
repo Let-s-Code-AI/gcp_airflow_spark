@@ -1,0 +1,95 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: airflow-alerts
+  namespace: monitoring
+  labels:
+    # Prometheus Operator wykrywa reguły po tym labelu
+    release: kube-prom
+spec:
+  groups:
+    - name: airflow.critical
+      interval: 30s
+      rules:
+        - alert: AirflowSchedulerDown
+          expr: absent(airflow_scheduler_heartbeat) or airflow_scheduler_heartbeat == 0
+          for: 2m
+          labels:
+            severity: critical
+            namespace: airflow
+          annotations:
+            summary: "Airflow Scheduler nie odpowiada"
+            description: "Scheduler nie wysłał heartbeat od ponad 2 minut. DAGi nie będą uruchamiane."
+
+        - alert: AirflowWebserverDown
+          expr: absent(up{job="airflow"})
+          for: 2m
+          labels:
+            severity: critical
+            namespace: airflow
+          annotations:
+            summary: "Airflow Webserver niedostępny"
+            description: "Nie można zebrać metryk z Airflow Webservera od ponad 2 minut."
+
+    - name: airflow.warning
+      interval: 60s
+      rules:
+        - alert: AirflowQueuedTasksTooHigh
+          expr: airflow_executor_queued_tasks > 20
+          for: 5m
+          labels:
+            severity: warning
+            namespace: airflow
+          annotations:
+            summary: "Dużo zadań w kolejce Airflow ({{ $value }})"
+            description: "Liczba zadań czekających na wykonanie przekroczyła 20. Możliwe przeciążenie workerów."
+
+        - alert: AirflowRunningTasksTooHigh
+          expr: airflow_executor_running_tasks > 16
+          for: 3m
+          labels:
+            severity: warning
+            namespace: airflow
+          annotations:
+            summary: "Wysoka liczba równoległych tasków ({{ $value }}/16)"
+            description: "Aktywnych zadań więcej niż liczba analityków — możliwe wyczerpanie zasobów klastra."
+
+        - alert: AirflowDAGParseTimeSlow
+          expr: airflow_dag_processing_total_parse_time > 30
+          for: 5m
+          labels:
+            severity: warning
+            namespace: airflow
+          annotations:
+            summary: "Powolny parse DAGów ({{ $value }}s)"
+            description: "Scheduler potrzebuje ponad 30s na parsowanie plików DAG. Sprawdź czy nie ma błędów importu."
+
+    - name: kubernetes.nodes
+      interval: 60s
+      rules:
+        - alert: NodeHighCPU
+          expr: 100 - (avg by(node) (rate(node_cpu_seconds_total{mode="idle"}[5m])) * 100) > 85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Wysokie użycie CPU na nodzie {{ $labels.node }} ({{ $value | printf \"%.0f\" }}%)"
+            description: "CPU powyżej 85% przez ostatnie 5 minut — klaster może być przeciążony."
+
+        - alert: NodeHighMemory
+          expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Wysokie użycie RAM na nodzie {{ $labels.instance }} ({{ $value | printf \"%.0f\" }}%)"
+            description: "Zużycie RAM powyżej 85%. Ryzyko OOMKill dla Podów."
+
+        - alert: NodeDiskSpaceLow
+          expr: (1 - (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"})) * 100 > 80
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Mało miejsca na dysku ({{ $labels.instance }}): {{ $value | printf \"%.0f\" }}%"
+            description: "Dysk / zapełniony w ponad 80%. Możliwe problemy z zapisem logów i danych."

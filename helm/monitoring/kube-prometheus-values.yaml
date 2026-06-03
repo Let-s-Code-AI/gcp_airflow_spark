@@ -1,0 +1,97 @@
+# kube-prometheus-stack — Prometheus + Grafana + AlertManager
+# chart: prometheus-community/kube-prometheus-stack
+
+grafana:
+  adminPassword: "Gr@fana#K8s$2024!xQ"
+
+  service:
+    type: NodePort
+    nodePort: 30300
+
+  # Gotowe dashboardy importowane przy starcie
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: default
+          orgId: 1
+          folder: ""
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/default
+
+  dashboards:
+    default:
+      # Kubernetes cluster overview
+      kubernetes-cluster:
+        gnetId: 7249
+        revision: 1
+        datasource: Prometheus
+      # Kubernetes pods
+      kubernetes-pods:
+        gnetId: 6417
+        revision: 1
+        datasource: Prometheus
+      # Node exporter full
+      node-exporter:
+        gnetId: 1860
+        revision: 37
+        datasource: Prometheus
+      # Airflow overview
+      airflow:
+        gnetId: 19492
+        revision: 4
+        datasource: Prometheus
+
+  # Loki jako dodatkowe źródło danych
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      url: http://loki.monitoring:3100
+      access: proxy
+      isDefault: false
+
+prometheus:
+  service:
+    type: NodePort
+    nodePort: 30090
+
+  prometheusSpec:
+    # Zbieraj reguły alertów ze wszystkich namespace'ów
+    ruleNamespaceSelector: {}
+    ruleSelector: {}
+    # Zbieraj metryki ze wszystkich ServiceMonitor/PodMonitor
+    serviceMonitorNamespaceSelector: {}
+    serviceMonitorSelector: {}
+    podMonitorNamespaceSelector: {}
+    podMonitorSelector: {}
+    retention: 15d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 10Gi
+
+alertmanager:
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 1Gi
+
+# node-exporter działa jako DaemonSet — metryki CPU/RAM/dysk per node
+nodeExporter:
+  enabled: true
+
+# kube-state-metrics — metryki obiektów K8s (Pody, Deploymenty, ...)
+kubeStateMetrics:
+  enabled: true

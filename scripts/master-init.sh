@@ -19,8 +19,7 @@ log() { echo "[$(date '+%H:%M:%S')] $*"; }
 log "Aktualizacja systemu..."
 apt-get update -qq
 apt-get install -y -qq curl wget gnupg2 apt-transport-https ca-certificates \
-  software-properties-common python3-pip python3-venv \
-  git nfs-common
+  software-properties-common python3-pip python3-venv git
 
 # ── 2. containerd ──────────────────────────────────────────────────────────────
 log "Instalacja containerd..."
@@ -164,70 +163,33 @@ until kubectl wait pod -n airflow -l app=postgres --for=condition=Ready --timeou
 POSTGRES_IP=$(kubectl get svc postgres -n airflow -o jsonpath='{.spec.clusterIP}')
 log "Postgres gotowy: $POSTGRES_IP"
 
-# ── 10. Katalog DAGów + NFS server na masterze ────────────────────────────────
-log "Tworzenie struktury katalogów DAGów i konfiguracja NFS..."
-mkdir -p /mnt/airflow-dags/admin
+# ── 10. Katalog DAGów na masterze ─────────────────────────────────────────────
+log "Tworzenie struktury katalogów DAGów..."
+MASTER_HOSTNAME=$(hostname)
+mkdir -p /opt/airflow/dags/admin
 ANALITYCY_LIST=$(echo "$ANALITYCY" | python3 -c "import sys,json; [print(s) for s in json.load(sys.stdin)]")
 for analityk in $ANALITYCY_LIST; do
-  mkdir -p "/mnt/airflow-dags/$analityk"
+  mkdir -p "/opt/airflow/dags/$analityk"
 done
-chmod -R 777 /mnt/airflow-dags
+chmod -R 777 /opt/airflow/dags
 
-cat <<'EOF' > /mnt/airflow-dags/.airflowignore
+cat <<'EOF' > /opt/airflow/dags/.airflowignore
 \.ipynb_checkpoints
 __pycache__
 .*\.pyc$
 EOF
 
-apt-get install -y -qq nfs-kernel-server
-echo "/mnt/airflow-dags 10.0.0.0/8(rw,sync,no_subtree_check,no_root_squash)" > /etc/exports
-exportfs -ra
-systemctl enable nfs-server
-systemctl start nfs-server
-
-# ── 11. NFS PV/PVC (przed Helm — scheduler/webserver muszą je widzieć przy starcie) ──
-log "Tworzenie NFS PersistentVolume dla DAGów..."
-MASTER_IP=$(hostname -I | awk '{print $1}')
-
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: airflow-dags-pv
-spec:
-  capacity:
-    storage: 5Gi
-  accessModes:
-    - ReadWriteMany
-  nfs:
-    server: $MASTER_IP
-    path: /mnt/airflow-dags
-  mountOptions:
-    - nfsvers=4.1
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: airflow-dags-pvc
-  namespace: airflow
-spec:
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 5Gi
-  volumeName: airflow-dags-pv
-  storageClassName: ""
-EOF
-
-# ── 11a. Airflow via Helm (1.15.0 + zewnętrzny postgres) ──────────────────────
+# ── 11. Airflow via Helm (1.15.0 + zewnętrzny postgres) ───────────────────────
 log "Instalacja Apache Airflow via Helm..."
 helm repo add apache-airflow https://airflow.apache.org
 helm repo update
 
 ADMIN_PASSWORD="Spark@Adm1n2024!"
 
-cat <<'EOF' > /tmp/airflow-values.yaml
+# hostPath — katalog DAGów z mastera montowany bezpośrednio do podów.
+# Wszystkie komponenty Airflow (w tym KubernetesExecutor worker pods) pinowane
+# do mastera przez nodeSelector, bo katalog /opt/airflow/dags istnieje tylko tam.
+cat <<EOF > /tmp/airflow-values.yaml
 dags:
   persistence:
     enabled: false
@@ -235,43 +197,55 @@ dags:
     enabled: false
 
 scheduler:
+  nodeSelector:
+    kubernetes.io/hostname: "$MASTER_HOSTNAME"
   extraVolumes:
-    - name: dags-nfs
-      persistentVolumeClaim:
-        claimName: airflow-dags-pvc
+    - name: dags
+      hostPath:
+        path: /opt/airflow/dags
+        type: Directory
   extraVolumeMounts:
-    - name: dags-nfs
+    - name: dags
       mountPath: /opt/airflow/dags
 
 webserver:
+  nodeSelector:
+    kubernetes.io/hostname: "$MASTER_HOSTNAME"
   extraVolumes:
-    - name: dags-nfs
-      persistentVolumeClaim:
-        claimName: airflow-dags-pvc
+    - name: dags
+      hostPath:
+        path: /opt/airflow/dags
+        type: Directory
   extraVolumeMounts:
-    - name: dags-nfs
+    - name: dags
       mountPath: /opt/airflow/dags
 
 triggerer:
+  nodeSelector:
+    kubernetes.io/hostname: "$MASTER_HOSTNAME"
   extraVolumes:
-    - name: dags-nfs
-      persistentVolumeClaim:
-        claimName: airflow-dags-pvc
+    - name: dags
+      hostPath:
+        path: /opt/airflow/dags
+        type: Directory
   extraVolumeMounts:
-    - name: dags-nfs
+    - name: dags
       mountPath: /opt/airflow/dags
 
 workers:
+  nodeSelector:
+    kubernetes.io/hostname: "$MASTER_HOSTNAME"
   extraVolumes:
-    - name: dags-nfs
-      persistentVolumeClaim:
-        claimName: airflow-dags-pvc
+    - name: dags
+      hostPath:
+        path: /opt/airflow/dags
+        type: Directory
   extraVolumeMounts:
-    - name: dags-nfs
+    - name: dags
       mountPath: /opt/airflow/dags
 EOF
 
-helm install airflow apache-airflow/airflow \
+helm install airflow-green apache-airflow/airflow \
   --namespace airflow \
   --version "1.15.0" \
   --values /tmp/airflow-values.yaml \
@@ -294,23 +268,28 @@ helm install airflow apache-airflow/airflow \
   --set "webserver.defaultUser.email=admin@course.local" \
   --set "webserver.defaultUser.firstName=Admin" \
   --set "webserver.defaultUser.lastName=Instructor" \
+  --set "labels.slot=green" \
   --timeout 12m \
   --wait
 
-# ── 11. NodePort — Airflow UI na porcie 30080 ──────────────────────────────────
-log "Wystawianie Airflow UI przez NodePort :30080..."
+# ── 11. NodePort — Green-Blue switching Service na porcie 30080 ───────────────
+log "Tworzenie switching Service (green-blue) na porcie :30080..."
 kubectl apply -n airflow -f - <<'EOF'
 apiVersion: v1
 kind: Service
 metadata:
-  name: airflow-webserver-nodeport
+  name: airflow-active
+  labels:
+    app: airflow
+    managed-by: green-blue
 spec:
   type: NodePort
   selector:
     component: webserver
-    release: airflow
+    slot: green
   ports:
-  - port: 8080
+  - name: http
+    port: 8080
     targetPort: 8080
     nodePort: 30080
 EOF
@@ -417,7 +396,7 @@ for s in analitycy:
     kexec("airflow", "users", "add-role", "--username", s, "--role", s)
 
     # Plik DAG ze scope'owanym access_control
-    dag_path = f"/mnt/airflow-dags/{s}/run_script_{s}.py"
+    dag_path = f"/opt/airflow/dags/{s}/run_script_{s}.py"
     with open(dag_path, "w") as f:
         f.write(DAG_TEMPLATE.replace("__ANALITYK__", s))
     print(f"[OK] {s}: rola + DAG run_script_{s}")
@@ -434,38 +413,7 @@ helm repo update
 
 kubectl create namespace jupyterhub
 
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: PersistentVolume
-metadata:
-  name: airflow-dags-pv-jh
-spec:
-  capacity:
-    storage: 5Gi
-  accessModes:
-    - ReadWriteMany
-  nfs:
-    server: $MASTER_IP
-    path: /mnt/airflow-dags
-  mountOptions:
-    - nfsvers=4.1
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: airflow-dags-pvc
-  namespace: jupyterhub
-spec:
-  accessModes:
-    - ReadWriteMany
-  resources:
-    requests:
-      storage: 5Gi
-  volumeName: airflow-dags-pv-jh
-  storageClassName: ""
-EOF
-
-JUPYTERHUB_VALUES=$(cat <<'JHVALUES'
+JUPYTERHUB_VALUES=$(cat <<JHVALUES
 hub:
   config:
     DummyAuthenticator:
@@ -494,7 +442,7 @@ singleuser:
     tag: "latest"
     pullPolicy: IfNotPresent
   extraEnv:
-    AIRFLOW_HOST: "http://airflow-webserver.airflow.svc.cluster.local:8080"
+    AIRFLOW_HOST: "http://airflow-green-webserver.airflow.svc.cluster.local:8080"
     AIRFLOW_USER: "admin"
   storage:
     capacity: 2Gi
@@ -502,11 +450,14 @@ singleuser:
       storageClass: local-path
     extraVolumes:
       - name: airflow-dags
-        persistentVolumeClaim:
-          claimName: airflow-dags-pvc
+        hostPath:
+          path: /opt/airflow/dags
+          type: Directory
     extraVolumeMounts:
       - name: airflow-dags
         mountPath: /home/jovyan/airflow-dags
+  nodeSelector:
+    kubernetes.io/hostname: "$MASTER_HOSTNAME"
   lifecycleHooks:
     postStart:
       exec:
@@ -515,8 +466,8 @@ singleuser:
           - "-c"
           - |
             pip install -q apache-airflow-client requests 2>&1 | tail -2
-            mkdir -p /home/jovyan/airflow-dags/${JUPYTERHUB_USER}
-            ln -sfn /home/jovyan/airflow-dags/${JUPYTERHUB_USER} /home/jovyan/dags
+            mkdir -p /home/jovyan/airflow-dags/\${JUPYTERHUB_USER}
+            ln -sfn /home/jovyan/airflow-dags/\${JUPYTERHUB_USER} /home/jovyan/dags
   cpu:
     limit: 1
     guarantee: 0.25
@@ -551,6 +502,302 @@ echo "$JUPYTERHUB_VALUES" | helm install jupyterhub jupyterhub/jupyterhub \
 
 log "JupyterHub gotowy na porcie :30088"
 
+# ── Monitoring: Prometheus + Grafana + OTel Collector + Loki ───────────────────
+log "Instalacja stosu monitoringu (Prometheus + Grafana + OTel + Loki)..."
+
+kubectl create namespace monitoring
+
+cat <<'EOF' > /tmp/kube-prometheus-values.yaml
+grafana:
+  adminPassword: "Gr@fana#K8s$2024!xQ"
+  service:
+    type: NodePort
+    nodePort: 30300
+  dashboardProviders:
+    dashboardproviders.yaml:
+      apiVersion: 1
+      providers:
+        - name: default
+          orgId: 1
+          folder: ""
+          type: file
+          disableDeletion: false
+          editable: true
+          options:
+            path: /var/lib/grafana/dashboards/default
+  dashboards:
+    default:
+      kubernetes-cluster:
+        gnetId: 7249
+        revision: 1
+        datasource: Prometheus
+      node-exporter:
+        gnetId: 1860
+        revision: 37
+        datasource: Prometheus
+      airflow:
+        gnetId: 19492
+        revision: 4
+        datasource: Prometheus
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      url: http://loki.monitoring:3100
+      access: proxy
+      isDefault: false
+prometheus:
+  service:
+    type: NodePort
+    nodePort: 30090
+  prometheusSpec:
+    ruleNamespaceSelector: {}
+    ruleSelector: {}
+    serviceMonitorNamespaceSelector: {}
+    serviceMonitorSelector: {}
+    podMonitorNamespaceSelector: {}
+    podMonitorSelector: {}
+    retention: 15d
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 10Gi
+alertmanager:
+  alertmanagerSpec:
+    storage:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 1Gi
+nodeExporter:
+  enabled: true
+kubeStateMetrics:
+  enabled: true
+EOF
+
+cat <<'EOF' > /tmp/loki-values.yaml
+loki:
+  enabled: true
+  persistence:
+    enabled: true
+    storageClassName: local-path
+    size: 5Gi
+  config:
+    auth_enabled: false
+    limits_config:
+      retention_period: 168h
+    schema_config:
+      configs:
+        - from: "2024-01-01"
+          store: boltdb-shipper
+          object_store: filesystem
+          schema: v11
+          index:
+            prefix: index_
+            period: 24h
+promtail:
+  enabled: true
+  config:
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+    scrape_configs:
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+        pipeline_stages:
+          - docker: {}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+grafana:
+  enabled: false
+EOF
+
+cat <<'EOF' > /tmp/otel-collector-values.yaml
+mode: daemonset
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: "0.102.0"
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+    prometheus:
+      config:
+        scrape_configs:
+          - job_name: airflow
+            scrape_interval: 15s
+            metrics_path: /metrics
+            static_configs:
+              - targets:
+                  - airflow-green-webserver.airflow.svc.cluster.local:8080
+          - job_name: jupyterhub
+            scrape_interval: 30s
+            metrics_path: /hub/metrics
+            static_configs:
+              - targets:
+                  - hub.jupyterhub.svc.cluster.local:8081
+    kubeletstats:
+      collection_interval: 20s
+      auth_type: serviceAccount
+      endpoint: "${env:K8S_NODE_IP}:10250"
+      insecure_skip_verify: true
+      metric_groups: [node, pod, container]
+  processors:
+    batch:
+      timeout: 10s
+      send_batch_size: 1000
+    memory_limiter:
+      limit_mib: 256
+      spike_limit_mib: 64
+      check_interval: 5s
+    k8sattributes:
+      auth_type: serviceAccount
+      passthrough: false
+      extract:
+        metadata:
+          - k8s.pod.name
+          - k8s.namespace.name
+          - k8s.node.name
+          - k8s.deployment.name
+  exporters:
+    prometheusremotewrite:
+      endpoint: http://kube-prom-kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/api/v1/write
+      tls:
+        insecure: true
+    loki:
+      endpoint: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+      tls:
+        insecure: true
+  service:
+    pipelines:
+      metrics:
+        receivers: [otlp, prometheus, kubeletstats]
+        processors: [memory_limiter, k8sattributes, batch]
+        exporters: [prometheusremotewrite]
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [loki]
+clusterRole:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: [nodes, nodes/metrics, nodes/proxy, services, endpoints, pods]
+      verbs: [get, list, watch]
+    - nonResourceURLs: [/metrics, /metrics/cadvisor]
+      verbs: [get]
+env:
+  - name: K8S_NODE_IP
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP
+EOF
+
+cat <<'EOF' > /tmp/airflow-alerts.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: airflow-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prom
+spec:
+  groups:
+    - name: airflow.critical
+      interval: 30s
+      rules:
+        - alert: AirflowSchedulerDown
+          expr: absent(airflow_scheduler_heartbeat) or airflow_scheduler_heartbeat == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Airflow Scheduler nie odpowiada"
+            description: "Scheduler nie wysłał heartbeat od ponad 2 minut."
+        - alert: AirflowWebserverDown
+          expr: absent(up{job="airflow"})
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Airflow Webserver niedostępny"
+            description: "Brak metryk z Airflow Webservera od ponad 2 minut."
+    - name: airflow.warning
+      interval: 60s
+      rules:
+        - alert: AirflowQueuedTasksTooHigh
+          expr: airflow_executor_queued_tasks > 20
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Dużo zadań w kolejce ({{ $value }})"
+            description: "Ponad 20 zadań czeka na wykonanie — możliwe przeciążenie."
+        - alert: NodeHighMemory
+          expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Wysokie użycie RAM ({{ $labels.instance }}: {{ $value | printf \"%.0f\" }}%)"
+            description: "Zużycie RAM powyżej 85% — ryzyko OOMKill."
+EOF
+
+helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+helm repo add grafana             https://grafana.github.io/helm-charts
+helm repo add open-telemetry      https://open-telemetry.github.io/opentelemetry-helm-charts
+helm repo update
+
+# 1. kube-prometheus-stack (Prometheus + Grafana + AlertManager + node-exporter)
+log "Instalacja kube-prometheus-stack..."
+helm install kube-prom prometheus-community/kube-prometheus-stack \
+  --namespace monitoring \
+  --version "61.3.0" \
+  --values /tmp/kube-prometheus-values.yaml \
+  --timeout 8m \
+  --wait
+
+# 2. Loki + Promtail (agregacja logów)
+log "Instalacja Loki + Promtail..."
+helm install loki grafana/loki-stack \
+  --namespace monitoring \
+  --version "2.10.2" \
+  --values /tmp/loki-values.yaml \
+  --timeout 5m \
+  --wait
+
+# 3. OpenTelemetry Collector (DaemonSet — scrape Airflow + JupyterHub)
+log "Instalacja OpenTelemetry Collector..."
+helm install otel-collector open-telemetry/opentelemetry-collector \
+  --namespace monitoring \
+  --version "0.97.1" \
+  --values /tmp/otel-collector-values.yaml \
+  --timeout 5m \
+  --wait
+
+# 4. Reguły alertów dla Airflow
+log "Wgrywanie reguł alertów Airflow..."
+kubectl apply -f /tmp/airflow-alerts.yaml
+
+log "Monitoring gotowy:"
+log "  Grafana:    http://$EXTERNAL_IP:30300  (admin / Gr@fana#K8s$2024!xQ)"
+log "  Prometheus: http://$EXTERNAL_IP:30090"
+
 # ── Gotowe ─────────────────────────────────────────────────────────────────────
 EXTERNAL_IP=$(curl -sf "http://metadata.google.internal/computeMetadata/v1/instance/network-interfaces/0/access-configs/0/external-ip" \
   -H "Metadata-Flavor: Google" || echo "BRAK-IP")
@@ -559,4 +806,6 @@ log "========================================"
 log "SETUP ZAKOŃCZONY"
 log "Airflow UI:    http://$EXTERNAL_IP:30080  (admin / $ADMIN_PASSWORD)"
 log "JupyterHub:    http://$EXTERNAL_IP:30088  (analityk01..16 / JupyterCourse2024!)"
+log "Grafana:       http://$EXTERNAL_IP:30300  (admin / Gr@fana#K8s$2024!xQ)"
+log "Prometheus:    http://$EXTERNAL_IP:30090"
 log "========================================"

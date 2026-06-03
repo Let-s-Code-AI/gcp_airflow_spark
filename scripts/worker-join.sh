@@ -14,7 +14,7 @@ log() { echo "[$(date '+%H:%M:%S')] worker-$WORKER_ID: $*"; }
 log "Aktualizacja systemu..."
 apt-get update -qq
 apt-get install -y -qq curl wget gnupg2 apt-transport-https ca-certificates \
-  software-properties-common nfs-common
+  software-properties-common
 
 # ── 2. containerd ──────────────────────────────────────────────────────────────
 log "Instalacja containerd..."

@@ -1,0 +1,122 @@
+# OpenTelemetry Collector — zbiera metryki z Airflow i JupyterHub
+# chart: open-telemetry/opentelemetry-collector
+# Tryb: DaemonSet (jeden Collector na każdy node klastra)
+
+mode: daemonset
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+  tag: "0.102.0"
+
+config:
+  receivers:
+    # Odbiera dane w formacie OTLP (gRPC + HTTP)
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+
+    # Scrape metryk z Airflow (StatsD → Prometheus endpoint)
+    prometheus:
+      config:
+        scrape_configs:
+          - job_name: airflow
+            scrape_interval: 15s
+            metrics_path: /metrics
+            static_configs:
+              - targets:
+                  - airflow-green-webserver.airflow.svc.cluster.local:8080
+            metric_relabel_configs:
+              - source_labels: [__name__]
+                regex: airflow_.*
+                action: keep
+
+          - job_name: jupyterhub
+            scrape_interval: 30s
+            metrics_path: /hub/metrics
+            static_configs:
+              - targets:
+                  - hub.jupyterhub.svc.cluster.local:8081
+
+    # Metryki kubelet z każdego node'a (CPU, RAM, sieć, dysk per Pod)
+    kubeletstats:
+      collection_interval: 20s
+      auth_type: serviceAccount
+      endpoint: "${env:K8S_NODE_IP}:10250"
+      insecure_skip_verify: true
+      metric_groups:
+        - node
+        - pod
+        - container
+
+  processors:
+    batch:
+      timeout: 10s
+      send_batch_size: 1000
+
+    memory_limiter:
+      limit_mib: 256
+      spike_limit_mib: 64
+      check_interval: 5s
+
+    # Dodaje atrybuty K8s do każdej metryki (namespace, pod, node)
+    k8sattributes:
+      auth_type: serviceAccount
+      passthrough: false
+      extract:
+        metadata:
+          - k8s.pod.name
+          - k8s.pod.uid
+          - k8s.namespace.name
+          - k8s.node.name
+          - k8s.deployment.name
+
+  exporters:
+    # Wysyła metryki do Prometheusa przez remote_write
+    prometheusremotewrite:
+      endpoint: http://kube-prom-kube-prometheus-stack-prometheus.monitoring.svc.cluster.local:9090/api/v1/write
+      tls:
+        insecure: true
+
+    # Wysyła logi do Loki
+    loki:
+      endpoint: http://loki.monitoring.svc.cluster.local:3100/loki/api/v1/push
+      tls:
+        insecure: true
+
+    # Debug — logi Collectora (wyłącz na produkcji)
+    debug:
+      verbosity: basic
+
+  service:
+    pipelines:
+      metrics:
+        receivers: [otlp, prometheus, kubeletstats]
+        processors: [memory_limiter, k8sattributes, batch]
+        exporters: [prometheusremotewrite]
+      logs:
+        receivers: [otlp]
+        processors: [memory_limiter, batch]
+        exporters: [loki]
+
+# Uprawnienia do odczytu kubelet metrics
+clusterRole:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: [nodes, nodes/metrics, nodes/proxy, services, endpoints, pods]
+      verbs: [get, list, watch]
+    - apiGroups: [extensions, networking.k8s.io]
+      resources: [ingresses]
+      verbs: [get, list, watch]
+    - nonResourceURLs: [/metrics, /metrics/cadvisor]
+      verbs: [get]
+
+# Zmienne środowiskowe wstrzykiwane do Collectora
+env:
+  - name: K8S_NODE_IP
+    valueFrom:
+      fieldRef:
+        fieldPath: status.hostIP

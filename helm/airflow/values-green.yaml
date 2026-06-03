@@ -1,0 +1,88 @@
+# Slot GREEN — aktywny (produkcja)
+# Helm release: airflow-green
+# Wdrożenie: helm install airflow-green apache-airflow/airflow -n airflow --version 1.15.0 -f values-green.yaml
+#
+# Po wdrożeniu ruch produkcyjny kierowany przez:
+#   kubectl get svc airflow-active -n airflow  (NodePort 30080)
+#   aktywny slot widoczny przez: kubectl get svc airflow-active -n airflow -o jsonpath='{.spec.selector.slot}'
+
+airflowVersion: "2.9.2"
+defaultAirflowTag: "2.9.2"
+
+# Etykieta slotu — po tej wartości Service kieruje ruch
+labels:
+  slot: green
+
+executor: KubernetesExecutor
+
+# Postgres zewnętrzny (StatefulSet postgres w tym samym namespace)
+postgresql:
+  enabled: false
+redis:
+  enabled: false
+
+data:
+  metadataConnection:
+    user: airflow
+    pass: airflow
+    host: postgres.airflow.svc.cluster.local
+    port: 5432
+    db: airflow
+    protocol: postgresql
+
+# Scheduler działa normalnie w aktywnym slocie
+scheduler:
+  replicas: 1
+  extraVolumes:
+    - name: dags
+      hostPath:
+        path: /opt/airflow/dags
+        type: Directory
+  extraVolumeMounts:
+    - name: dags
+      mountPath: /opt/airflow/dags
+
+webserver:
+  replicas: 2
+  service:
+    type: ClusterIP     # ruch przez airflow-active, nie bezpośrednio
+  defaultUser:
+    enabled: true
+    role: Admin
+    username: admin
+    password: admin
+    email: admin@course.local
+    firstName: Admin
+    lastName: Instructor
+  extraVolumes:
+    - name: dags
+      hostPath:
+        path: /opt/airflow/dags
+        type: Directory
+  extraVolumeMounts:
+    - name: dags
+      mountPath: /opt/airflow/dags
+
+triggerer:
+  extraVolumes:
+    - name: dags
+      hostPath:
+        path: /opt/airflow/dags
+        type: Directory
+  extraVolumeMounts:
+    - name: dags
+      mountPath: /opt/airflow/dags
+
+workers:
+  extraVolumes:
+    - name: dags
+      hostPath:
+        path: /opt/airflow/dags
+        type: Directory
+  extraVolumeMounts:
+    - name: dags
+      mountPath: /opt/airflow/dags
+
+env:
+  - name: AIRFLOW__CORE__LOAD_EXAMPLES
+    value: "False"

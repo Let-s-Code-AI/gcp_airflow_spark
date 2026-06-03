@@ -42,8 +42,9 @@ singleuser:
       storageClass: local-path
     extraVolumes:
       - name: airflow-dags
-        persistentVolumeClaim:
-          claimName: airflow-dags-pvc
+        hostPath:
+          path: /opt/airflow/dags
+          type: Directory
     extraVolumeMounts:
       - name: airflow-dags
         mountPath: /home/jovyan/airflow-dags

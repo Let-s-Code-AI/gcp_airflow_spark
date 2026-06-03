@@ -1,0 +1,31 @@
+# Service kierujący ruch produkcyjny do aktywnego slotu (green lub blue).
+# Przełączenie: zmień selector.slot z "green" na "blue" (lub odwrotnie).
+# Czas przełączenia: < 1 sekunda, zero downtime.
+#
+# Przełączenie na blue:
+#   kubectl patch svc airflow-active -n airflow -p '{"spec":{"selector":{"slot":"blue"}}}'
+# Rollback na green:
+#   kubectl patch svc airflow-active -n airflow -p '{"spec":{"selector":{"slot":"green"}}}'
+#
+# Lub użyj skryptu: scripts/green-blue-switch.sh
+
+apiVersion: v1
+kind: Service
+metadata:
+  name: airflow-active
+  namespace: airflow
+  labels:
+    app: airflow
+    managed-by: green-blue
+  annotations:
+    green-blue/description: "Switching service — edytuj selector.slot aby zmienić aktywny slot"
+spec:
+  type: NodePort
+  selector:
+    component: webserver
+    slot: green          # ← TYLKO ta linia się zmienia przy przełączeniu
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080

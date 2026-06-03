@@ -1,0 +1,53 @@
+# Loki Stack — agregacja logów z całego klastra
+# chart: grafana/loki-stack
+# Zawiera: Loki (backend) + Promtail (agent na każdym nodzie)
+
+loki:
+  enabled: true
+  persistence:
+    enabled: true
+    storageClassName: local-path
+    size: 5Gi
+  config:
+    auth_enabled: false
+    ingester:
+      chunk_idle_period: 3m
+      chunk_block_size: 262144
+      chunk_retain_period: 1m
+    limits_config:
+      retention_period: 168h   # 7 dni logów
+    schema_config:
+      configs:
+        - from: "2024-01-01"
+          store: boltdb-shipper
+          object_store: filesystem
+          schema: v11
+          index:
+            prefix: index_
+            period: 24h
+
+# Promtail — DaemonSet zbierający logi ze wszystkich Podów przez /var/log/pods
+promtail:
+  enabled: true
+  config:
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+    scrape_configs:
+      - job_name: kubernetes-pods
+        kubernetes_sd_configs:
+          - role: pod
+        pipeline_stages:
+          - docker: {}
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_namespace]
+            target_label: namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            target_label: pod
+          - source_labels: [__meta_kubernetes_pod_container_name]
+            target_label: container
+          - source_labels: [__meta_kubernetes_pod_label_component]
+            target_label: component
+
+# Grafana nie instalujemy tutaj — używamy tej z kube-prometheus-stack
+grafana:
+  enabled: false
