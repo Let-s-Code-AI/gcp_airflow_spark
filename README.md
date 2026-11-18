@@ -476,15 +476,6 @@ Service Account (`{course_name}-vm`) ma role:
 
 ---
 
-## 📚 Dokumentacja dodatkowa
-
-- [`gcp_snapshot_presentation.md`](gcp_snapshot_presentation.md) — GCP Snapshots & Recovery
-- [`green_blue_presentation.md`](green_blue_presentation.md) — Green-Blue Strategy
-- [`kubernetes_basics.md`](kubernetes_basics.md) — K8s Fundamentals
-- [`monitoring_basics.md`](monitoring_basics.md) — Monitoring Stack
-
----
-
 ## 🐛 Troubleshooting
 
 ### Master nie startuje
