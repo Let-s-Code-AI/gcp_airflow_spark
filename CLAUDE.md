@@ -10,11 +10,35 @@ There is no application build or test suite. Changes are checked with the linter
 
 ## Rules
 
-- **Infrastructure changes go only through GitHub Actions.** Never apply changes from a local machine. That rules out `terraform apply` and `terraform destroy`, `scripts/deploy.sh` and `scripts/destroy.sh`, `helm install`, `helm upgrade` and `helm uninstall`, `kubectl apply`, `patch`, `scale` and `delete`, and `green-blue-switch.sh deploy`, `switch` and `rollback`. Your job is to change code in the repo, run lint and read-only commands, and open a PR; the workflow applies the change. `.claude/settings.json` also blocks any Bash command that contains `deploy.sh`, so read that file with the Read tool.
+- **Infrastructure changes go only through GitHub Actions.** Never apply changes from a local machine. That rules out `terraform apply` and `terraform destroy`, `scripts/deploy.sh` and `scripts/destroy.sh`, `helm install`, `helm upgrade` and `helm uninstall`, `kubectl apply`, `patch`, `scale` and `delete`, and `green-blue-switch.sh deploy`, `switch` and `rollback`. Your job is to change code in the repo, run lint and read-only commands, and open a PR; the workflow applies the change. `.claude/settings.json` enforces this (see below).
 - **Commits follow [Conventional Commits](https://www.conventionalcommits.org/):** `<type>(<scope>): <description>`.
   - Types: `feat`, `fix`, `docs`, `refactor`, `chore`, `ci`, `perf`, `test`, `build`, `style`, `revert`.
   - Suggested scopes: `terraform`, `airflow`, `jupyterhub`, `monitoring`, `dags`, `scripts`, `green-blue`.
   - Mark a breaking change with `!` (e.g. `feat(terraform)!: ...`) or a `BREAKING CHANGE:` footer.
+
+### Permission guardrails (`.claude/settings.json`)
+
+`permissions.deny` blocks the following. A denied call fails immediately; don't look for a workaround (`env`, `eval`, `xargs`, another wrapper). Ask the user instead.
+
+| Area | Blocked | Still allowed |
+|---|---|---|
+| Terraform | `apply`, `destroy`, `import`, `refresh`, `taint`/`untaint`, `force-unlock`, `state rm/mv/push/replace-provider`, `workspace new/delete` | `init`, `fmt`, `validate`, `plan`, `output`, `show`, `state list/show` |
+| gcloud | `create`, `delete`, `update`, `patch`, `set`, `start`/`stop`, `deploy`, `enable`/`disable`, `cp`/`mv`/`rm`/`rsync`/`scp` and other mutating verbs, plus every `add-*`, `remove-*`, `set-*`, `attach-*`, `detach-*` | `list`, `describe`, `--help`, `config list`, `ssh` |
+| gsutil | `cp`, `mv`, `rm`, `rsync`, `mb`, `rb`, `compose`, `setmeta`, `defacl`, `retention`, `kms`, and the `set`/`ch`/`create`/`delete` subcommands (`acl set`, `iam ch`, `notification create` …) | `ls`, `cat`, `du`, `stat`, `version`, `acl get`, `iam get` |
+| kubectl | `apply` (including `--dry-run`), `create`, `delete`, `edit`, `patch`, `replace`, `scale`, `set`, `label`, `annotate`, `drain`/`cordon`, `run`, `exec`, `cp`, `attach`, `debug`, `rollout restart/undo/pause/resume` … | `get`, `describe`, `logs`, `top`, `rollout status`, `port-forward` |
+| Helm | `install`, `upgrade`, `uninstall`/`delete`/`del`/`un`, `rollback`, `test` | `list`, `status`, `history`, `get`, `lint`, `template` |
+| Scripts | `deploy.sh`, `destroy.sh`; `green-blue-switch.sh deploy/switch/rollback` | `green-blue-switch.sh status`, reading the scripts (`cat`, Read), `bash -n` on a glob |
+| Secrets | Reading `.env` (Read tool, `cat`/`source`/`grep` etc. on `.env`) | `.env.example` |
+
+How the rules match:
+- Each verb rule exists in two forms: bare (`terraform apply`) and with trailing arguments (`terraform apply *`).
+- It also exists with anything between the tool and the verb (`terraform * apply`, `terraform * apply *`), which covers `-chdir=...`, `kubectl -n ns`, `gsutil -m` and `gcloud <group>`.
+- Script rules cover `./scripts/x.sh`, `scripts/x.sh`, `./x.sh`, absolute paths, and `bash`/`sh`/`source`/`.`.
+- Commands joined with `&&`, `;` or `|` are checked part by part, so `cd terraform && terraform apply` is denied too.
+
+A few read-only commands are also caught because they contain a mutating verb as a word: `kubectl auth can-i delete …`, `kubectl get pods -L label`, `bash -n scripts/deploy.sh`. Use another form, such as `bash -n scripts/*.sh`.
+
+These rules are a guardrail, not a security boundary: they can't catch every shell form, and `ssh` to the master is not blocked. The real control is that only GitHub Actions holds deploy credentials. To change the list, edit `.claude/settings.json` in a PR. Keep `!.claude/settings.json` in `.gitignore`, because `*.json` is ignored globally.
 
 ## Commands
 
@@ -35,7 +59,7 @@ python3 -m py_compile dags/*.py notebooks/airflow_helper.py
 
 yamllint helm/ k8s/
 helm lint helm/airflow -f helm/airflow/values-green.yaml   # values files only; there is no Chart.yaml in the repo
-kubectl apply --dry-run=client -f k8s/ -R
+kubeconform -summary -ignore-missing-schemas k8s/   # `kubectl apply --dry-run` is blocked by the deny rules
 ```
 
 ### Read-only
@@ -60,7 +84,7 @@ kubectl logs -n monitoring -l app.kubernetes.io/name=opentelemetry-collector
 tail -f /var/log/master-init.log           # bootstrap progress and errors
 ```
 
-Secrets come from `.env` (gitignored; `.env.example` is referenced but not committed). Required: `REGION`, `ZONE`, `AIRFLOW_ADMIN_PASSWORD`, `AIRFLOW_ANALYST_PASSWORD`, `JUPYTERHUB_ADMIN_PASSWORD`, `JUPYTERHUB_ANALYST_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`.
+Secrets come from `.env` (gitignored; `.env.example` is referenced but not committed; Claude is denied reading `.env`). Required: `REGION`, `ZONE`, `AIRFLOW_ADMIN_PASSWORD`, `AIRFLOW_ANALYST_PASSWORD`, `JUPYTERHUB_ADMIN_PASSWORD`, `JUPYTERHUB_ANALYST_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`.
 
 ## Architecture: how the pieces connect
 
