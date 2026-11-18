@@ -21,7 +21,7 @@ Deploy i sprzątanie:
 ./scripts/destroy.sh <PROJECT_ID>    # interaktywne: trzeba wpisać 'kasuj'
 ```
 
-- `deploy.sh` jest zablokowany dla Claude w `.claude/settings.json` (`permissions.deny`: `Bash(*deploy.sh*)`). Uruchamia go użytkownik. Nie obchodź blokady przez ręczne `terraform apply`.
+- `deploy.sh` jest zablokowany dla Claude w `.claude/settings.json` (`permissions.deny`, lista w sekcji „Blokady uprawnień Claude”). Uruchamia go użytkownik. Nie obchodź blokady przez ręczne `terraform apply`.
 - `deploy.sh` wymaga pliku `.env` w katalogu głównym (gitignorowany) ze zmiennymi: `AIRFLOW_ADMIN_PASSWORD`, `AIRFLOW_ANALYST_PASSWORD`, `JUPYTERHUB_ADMIN_PASSWORD`, `JUPYTERHUB_ANALYST_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, `REGION`, `ZONE`.
 - Pięć zmiennych z hasłami w `terraform/variables.tf` nie ma wartości domyślnych. Każde ręczne `terraform plan/apply/destroy` wymaga ich przez `-var` albo `TF_VAR_*`, inaczej Terraform pyta interaktywnie. Dotyczy to też `destroy.sh` (przekazuje tylko `project_id`) i przykładów z README.
 - State jest lokalny (`terraform/terraform.tfstate`, gitignorowany) — nie ma zdalnego backendu.
@@ -42,6 +42,20 @@ Przełączanie slotów Airflow (wymaga `kubectl` i `helm` z kontekstem klastra, 
 ./scripts/green-blue-switch.sh switch blue     # patch selektora Service airflow-active
 ./scripts/green-blue-switch.sh rollback
 ```
+
+## Blokady uprawnień Claude
+
+`.claude/settings.json` jest śledzony w git. `.gitignore` ignoruje `*.json`, więc wyjątek `!.claude/settings.json` jest wymagany. Plik zawiera `permissions.deny`, które blokuje dla Claude:
+
+- **Terraform:** `apply`, `destroy`, `import`, `refresh`, `taint`/`untaint`, `force-unlock`, `state rm|mv|push|replace-provider`, `workspace new|delete`, `-migrate-state`, `-force-copy`.
+- **gcloud:** `create`, `delete`, `update`, `patch`, `set`, `unset`, `start`, `stop`, `reset`, `resume`, `suspend`, `resize`, `import`, `deploy`, `enable`, `disable`, `apply`, `move`, `cancel`, `restore`, `rollback`, `upgrade`, `undelete`, `cp`, `mv`, `rm`, `rsync`, `scp` oraz `add-*`, `remove-*`, `set-*`, `attach-*`, `detach-*`.
+- **gsutil:** `cp`, `mv`, `rm`, `rsync`, `mb`, `rb`, `compose`, `setmeta`, `defacl`, `retention`, `kms`, `set`, `ch`, `create`, `delete`, `stopchannel`.
+- **kubectl:** `apply`, `create`, `delete`, `edit`, `patch`, `replace`, `scale`, `autoscale`, `set`, `label`, `annotate`, `taint`, `cordon`/`uncordon`, `drain`, `expose`, `run`, `exec`, `cp`, `attach`, `debug`, `rollout restart|undo|pause|resume`, `certificate approve|deny`.
+- **helm:** `install`, `upgrade`, `uninstall`/`delete`/`del`/`un`, `rollback`, `test`.
+- **Skrypty:** `deploy.sh`, `destroy.sh` oraz `green-blue-switch.sh deploy|switch|rollback`, także przez `bash`/`sh`/`source` i w różnych formach ścieżki.
+- **Sekrety:** odczyt `./.env`, `**/.env` oraz polecenia kończące się na `.env`.
+
+Polecenia spoza tej listy (np. `kubectl get`, `terraform plan`, `gcloud ... list|describe`) nie są blokowane przez `deny`. Ich dozwolenie zależy od ustawień `allow`/trybu uprawnień. Zmiana listy to zmiana w `settings.json`, nie w `CLAUDE.md`.
 
 ## Architektura
 
