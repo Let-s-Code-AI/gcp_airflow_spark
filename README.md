@@ -270,7 +270,7 @@ Domyślne wartości w `terraform/variables.tf`:
 | `zone` | `europe-west1-b` | Strefa dla mastera |
 | `course_name` | `airflow-spark-course` | Prefix dla zasobów |
 | `master_machine_type` | `e2-standard-2` | 2 vCPU, 8 GB RAM |
-| `worker_machine_type` | `e2-standard-4` | 4 vCPU, 16 GB RAM × 2 nodes |
+| `worker_machine_type` | `e2-standard-2` | 2 vCPU, 8 GB RAM × 2 nodes |
 | `allowed_cidr` | `0.0.0.0/0` | CIDR dla dostępu SSH |
 | `ssh_public_key` | `""` | Treść publicznego klucza SSH (w CI: `vars.SSH_PUBLIC_KEY`) |
 | `ssh_pub_key_path` | `~/.ssh/id_ed25519.pub` | Fallback: plik z kluczem, używany gdy `ssh_public_key` jest pusta |
