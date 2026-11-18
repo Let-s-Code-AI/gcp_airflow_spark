@@ -90,6 +90,9 @@ resource "google_compute_instance" "worker" {
   zone         = each.value.zone
   tags         = ["course-node"]
 
+  # Zmiana machine_type na działającej VM-ce wymaga jej zatrzymania.
+  allow_stopping_for_update = true
+
   scheduling {
     on_host_maintenance = "MIGRATE"
     automatic_restart   = true
