@@ -12,6 +12,7 @@ terraform/*_override.tf.json
 # Credentials & secrets
 *.json
 !helm/**/*.json
+!.claude/settings.json
 *.pem
 *.key
 *.p12
