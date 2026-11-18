@@ -189,13 +189,12 @@ gsutil -m cp scripts/*.py gs://{project}-airflow-spark-dags/dags/admin/
 ```
 .
 ├── terraform/
-│   ├── main.tf                 # Provider + APIs
+│   ├── main.tf                 # Provider + APIs + backend GCS
 │   ├── variables.tf            # Zmienne (project_id, region, machine types)
 │   ├── vms.tf                  # GCE instances (master, workers)
 │   ├── network.tf              # VPC, subnets, firewall
 │   ├── gcs.tf                  # Cloud Storage buckets
-│   ├── outputs.tf              # IPs, URLs, SSH commands
-│   └── terraform.tfstate       # State (nie commitować!)
+│   └── outputs.tf              # IPs, URLs, SSH commands
 │
 ├── scripts/
 │   ├── deploy.sh               # Główny skrypt deploy (invoke terraform)
@@ -242,8 +241,10 @@ gsutil -m cp scripts/*.py gs://{project}-airflow-spark-dags/dags/admin/
 ```bash
 cd terraform
 
-# Inicjalizacja
-terraform init
+# Inicjalizacja (state w GCS — bucket i prefix podawane przy init)
+terraform init \
+  -backend-config="bucket=$TF_STATE_BUCKET" \
+  -backend-config="prefix=$TF_STATE_PREFIX"
 
 # Plan zmian
 terraform plan -var="project_id=$PROJECT_ID"
@@ -271,7 +272,35 @@ Domyślne wartości w `terraform/variables.tf`:
 | `master_machine_type` | `e2-standard-2` | 2 vCPU, 8 GB RAM |
 | `worker_machine_type` | `e2-standard-4` | 4 vCPU, 16 GB RAM × 2 nodes |
 | `allowed_cidr` | `0.0.0.0/0` | CIDR dla dostępu SSH |
-| `ssh_pub_key_path` | `~/.ssh/id_ed25519.pub` | Publiczny klucz SSH |
+| `ssh_public_key` | `""` | Treść publicznego klucza SSH (w CI: `vars.SSH_PUBLIC_KEY`) |
+| `ssh_pub_key_path` | `~/.ssh/id_ed25519.pub` | Fallback: plik z kluczem, używany gdy `ssh_public_key` jest pusta |
+
+### Remote state i migracja
+
+State leży w buckecie GCS (`backend "gcs" {}`). Bucket musi istnieć wcześniej i nie może być zarządzany przez ten Terraform. Jeśli masz wcześniejszy lokalny state, administrator migruje go **przed pierwszym uruchomieniem CI**:
+
+```bash
+cd terraform
+terraform init -migrate-state \
+  -backend-config="bucket=$TF_STATE_BUCKET" \
+  -backend-config="prefix=$TF_STATE_PREFIX"
+```
+
+Hasła trafiają do metadanych VM, więc są też w state — bucket ma być prywatny.
+
+### Deploy z GitHub Actions
+
+Workflow `.github/workflows/deploy.yml` uruchamia się ręcznie (`workflow_dispatch`). Pola `run_apply` i `run_smoke_test` są domyślnie wyłączone — wtedy workflow robi tylko `init`, `validate` i `plan`.
+
+| Rodzaj | Nazwa | Użycie |
+|--------|-------|--------|
+| Variable | `GCP_PROJECT_ID` | `TF_VAR_project_id` |
+| Variable | `SSH_PUBLIC_KEY` | `TF_VAR_ssh_public_key` |
+| Variable | `TF_STATE_BUCKET`, `TF_STATE_PREFIX` | `-backend-config` przy `terraform init` |
+| Variable | `GCP_WORKLOAD_IDENTITY_PROVIDER`, `GCP_SERVICE_ACCOUNT` | logowanie do GCP (Workload Identity Federation) |
+| Variable (opcjonalnie) | `REGION`, `ZONE` | `TF_VAR_region`, `TF_VAR_zone` |
+| Secret | `AIRFLOW_ADMIN_PASSWORD`, `AIRFLOW_ANALYST_PASSWORD`, `JUPYTERHUB_ADMIN_PASSWORD`, `JUPYTERHUB_ANALYST_PASSWORD`, `GRAFANA_ADMIN_PASSWORD` | `TF_VAR_*_password` |
+| Secret (dla `run_smoke_test`) | `SSH_PRIVATE_KEY` | para do `SSH_PUBLIC_KEY` |
 
 ---
 

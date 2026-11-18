@@ -22,9 +22,11 @@ Deploy i sprzątanie:
 ```
 
 - `deploy.sh` jest zablokowany dla Claude w `.claude/settings.json` (`permissions.deny`, lista w sekcji „Blokady uprawnień Claude”). Uruchamia go użytkownik. Nie obchodź blokady przez ręczne `terraform apply`.
-- `deploy.sh` wymaga pliku `.env` w katalogu głównym (gitignorowany) ze zmiennymi: `AIRFLOW_ADMIN_PASSWORD`, `AIRFLOW_ANALYST_PASSWORD`, `JUPYTERHUB_ADMIN_PASSWORD`, `JUPYTERHUB_ANALYST_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, `REGION`, `ZONE`.
+- `deploy.sh` wymaga pliku `.env` w katalogu głównym (gitignorowany) ze zmiennymi: `AIRFLOW_ADMIN_PASSWORD`, `AIRFLOW_ANALYST_PASSWORD`, `JUPYTERHUB_ADMIN_PASSWORD`, `JUPYTERHUB_ANALYST_PASSWORD`, `GRAFANA_ADMIN_PASSWORD`, `REGION`, `ZONE`, `TF_STATE_BUCKET`, `TF_STATE_PREFIX`.
 - Pięć zmiennych z hasłami w `terraform/variables.tf` nie ma wartości domyślnych. Każde ręczne `terraform plan/apply/destroy` wymaga ich przez `-var` albo `TF_VAR_*`, inaczej Terraform pyta interaktywnie. Dotyczy to też `destroy.sh` (przekazuje tylko `project_id`) i przykładów z README.
-- State jest lokalny (`terraform/terraform.tfstate`, gitignorowany) — nie ma zdalnego backendu.
+- State jest zdalny: `backend "gcs" {}` w `main.tf`, bez wartości. Każde `terraform init` wymaga `-backend-config="bucket=..."` i `-backend-config="prefix=..."` (`deploy.sh` bierze je z `TF_STATE_BUCKET`/`TF_STATE_PREFIX`; lint używa `init -backend=false`). Lokalny state migruje administrator (`terraform init -migrate-state`) przed pierwszym uruchomieniem CI.
+- Klucz SSH: zmienna `ssh_public_key` (treść klucza; w CI `vars.SSH_PUBLIC_KEY`), a gdy pusta — fallback na plik z `ssh_pub_key_path`.
+- `.github/workflows/deploy.yml` (`workflow_dispatch`, `run_apply` i `run_smoke_test` domyślnie wyłączone) robi `init`/`validate`/`plan`, opcjonalnie `apply` i smoke test przez SSH. Projekt i hasła przekazuje jako `TF_VAR_*`; lista zmiennych i sekretów jest w README.
 
 Praca z działającym klastrem odbywa się z mastera — tylko on ma publiczne IP:
 
