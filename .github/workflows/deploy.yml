@@ -1,0 +1,189 @@
+name: Deploy
+
+# Ręczny deploy klastra przez Terraform. Domyślnie (oba pola wyłączone) workflow
+# tylko inicjuje backend, waliduje i robi `terraform plan` — niczego nie zmienia.
+#
+# Wymagane (Settings → Secrets and variables → Actions):
+#   Variables: GCP_PROJECT_ID, SSH_PUBLIC_KEY, TF_STATE_BUCKET, TF_STATE_PREFIX,
+#              GCP_WORKLOAD_IDENTITY_PROVIDER, GCP_SERVICE_ACCOUNT
+#              (opcjonalnie: REGION, ZONE)
+#   Secrets:   AIRFLOW_ADMIN_PASSWORD, AIRFLOW_ANALYST_PASSWORD,
+#              JUPYTERHUB_ADMIN_PASSWORD, JUPYTERHUB_ANALYST_PASSWORD,
+#              GRAFANA_ADMIN_PASSWORD
+#              (dla run_smoke_test: SSH_PRIVATE_KEY — para do SSH_PUBLIC_KEY)
+on:
+  workflow_dispatch:
+    inputs:
+      run_apply:
+        description: "Wykonaj terraform apply (bez tego tylko plan)"
+        type: boolean
+        default: false
+      run_smoke_test:
+        description: "Po wdrożeniu sprawdź klaster przez SSH (wymaga SSH_PRIVATE_KEY)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write # Workload Identity Federation
+
+# Jeden bieg naraz — równoległe apply na tym samym state'cie się blokują.
+concurrency:
+  group: terraform-deploy
+  cancel-in-progress: false
+
+env:
+  TERRAFORM_VERSION: "1.16.4"
+
+jobs:
+  lint:
+    name: Lint
+    uses: ./.github/workflows/lint.yml
+
+  deploy:
+    name: Terraform (plan/apply) i smoke test
+    needs: lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: terraform
+    env:
+      TF_IN_AUTOMATION: "true"
+      TF_INPUT: "false"
+      TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+      TF_VAR_ssh_public_key: ${{ vars.SSH_PUBLIC_KEY }}
+      TF_VAR_airflow_admin_password: ${{ secrets.AIRFLOW_ADMIN_PASSWORD }}
+      TF_VAR_airflow_analyst_password: ${{ secrets.AIRFLOW_ANALYST_PASSWORD }}
+      TF_VAR_jupyterhub_admin_password: ${{ secrets.JUPYTERHUB_ADMIN_PASSWORD }}
+      TF_VAR_jupyterhub_analyst_password: ${{ secrets.JUPYTERHUB_ANALYST_PASSWORD }}
+      TF_VAR_grafana_admin_password: ${{ secrets.GRAFANA_ADMIN_PASSWORD }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Sprawdź konfigurację
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_STATE_PREFIX: ${{ vars.TF_STATE_PREFIX }}
+          GCP_WORKLOAD_IDENTITY_PROVIDER: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          GCP_SERVICE_ACCOUNT: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          REGION_VAR: ${{ vars.REGION }}
+          ZONE_VAR: ${{ vars.ZONE }}
+        run: |
+          missing=0
+          for v in TF_VAR_project_id TF_VAR_ssh_public_key \
+                   TF_VAR_airflow_admin_password TF_VAR_airflow_analyst_password \
+                   TF_VAR_jupyterhub_admin_password TF_VAR_jupyterhub_analyst_password \
+                   TF_VAR_grafana_admin_password; do
+            if [[ -z "${!v}" ]]; then
+              echo "::error::Brak wartości dla $v (sprawdź zmienne/sekrety repozytorium)"
+              missing=1
+            fi
+          done
+          for v in TF_STATE_BUCKET TF_STATE_PREFIX GCP_WORKLOAD_IDENTITY_PROVIDER GCP_SERVICE_ACCOUNT; do
+            if [[ -z "${!v}" ]]; then
+              echo "::error::Brak zmiennej repozytorium $v"
+              missing=1
+            fi
+          done
+          [[ "$missing" -eq 0 ]] || exit 1
+          # Puste TF_VAR_region/zone nadpisałyby wartości domyślne pustym stringiem.
+          [[ -z "$REGION_VAR" ]] || echo "TF_VAR_region=$REGION_VAR" >> "$GITHUB_ENV"
+          [[ -z "$ZONE_VAR" ]]   || echo "TF_VAR_zone=$ZONE_VAR"     >> "$GITHUB_ENV"
+
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+
+      - uses: hashicorp/setup-terraform@dfe3c3f87815947d99a8997f908cb6525fc44e9e # v4.0.1
+        with:
+          terraform_version: ${{ env.TERRAFORM_VERSION }}
+          terraform_wrapper: false
+
+      - name: terraform init
+        env:
+          TF_STATE_BUCKET: ${{ vars.TF_STATE_BUCKET }}
+          TF_STATE_PREFIX: ${{ vars.TF_STATE_PREFIX }}
+        run: |
+          terraform init \
+            -backend-config="bucket=${TF_STATE_BUCKET}" \
+            -backend-config="prefix=${TF_STATE_PREFIX}"
+
+      - name: terraform validate
+        run: terraform validate
+
+      - name: terraform plan
+        run: terraform plan -out=tfplan -lock-timeout=5m
+
+      - name: terraform apply
+        if: ${{ inputs.run_apply }}
+        run: terraform apply -lock-timeout=5m tfplan
+
+      - name: Smoke test (SSH na master)
+        if: ${{ inputs.run_smoke_test }}
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          if [[ -z "$SSH_PRIVATE_KEY" ]]; then
+            echo "::error::Smoke test wymaga sekretu SSH_PRIVATE_KEY"
+            exit 1
+          fi
+
+          MASTER_IP="$(terraform output -raw master_external_ip)"
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/smoke_key
+          chmod 600 ~/.ssh/smoke_key
+          remote() {
+            ssh -i ~/.ssh/smoke_key -o BatchMode=yes -o ConnectTimeout=10 \
+              -o StrictHostKeyChecking=accept-new ubuntu@"$MASTER_IP" "$@"
+          }
+
+          echo "==> Czekam na koniec bootstrapu na $MASTER_IP (do ~20 min)"
+          ready=0
+          for i in $(seq 1 60); do
+            if remote "grep -q 'SETUP ZAKOŃCZONY' /var/log/master-init.log" 2>/dev/null; then
+              ready=1; break
+            fi
+            echo "  Czekam... ($i/60)"
+            sleep 20
+          done
+          [[ "$ready" -eq 1 ]] || { echo "::error::Bootstrap nie zakończył się w czasie"; exit 1; }
+
+          echo "==> Node'y"
+          remote "kubectl get nodes -o wide"
+          not_ready="$(remote "kubectl get nodes --no-headers" | awk '$2 != "Ready"' | wc -l)"
+          total="$(remote "kubectl get nodes --no-headers" | wc -l)"
+          [[ "$total" -eq 3 && "$not_ready" -eq 0 ]] \
+            || { echo "::error::Oczekiwano 3 node'ów Ready (jest $total, nie-Ready: $not_ready)"; exit 1; }
+
+          echo "==> Pody (do 10 min na ustabilizowanie)"
+          ok=0
+          for i in $(seq 1 30); do
+            bad="$(remote "kubectl get pods -A --no-headers" | awk '$4 != "Running" && $4 != "Completed"')"
+            if [[ -z "$bad" ]]; then ok=1; break; fi
+            echo "$bad"; echo "  Czekam... ($i/30)"
+            sleep 20
+          done
+          [[ "$ok" -eq 1 ]] || { echo "::error::Nie wszystkie pody są Running/Completed"; exit 1; }
+
+          echo "==> Endpointy NodePort (z mastera)"
+          fail=0
+          for ep in "Airflow:30080/health" "JupyterHub:30088/hub/health" \
+                    "Grafana:30300/api/health" "Prometheus:30090/-/healthy"; do
+            name="${ep%%:*}"; path="${ep#*:}"
+            if remote "curl -fsS -m 10 -o /dev/null http://localhost:${path}"; then
+              echo "  OK   $name"
+            else
+              echo "  FAIL $name"; fail=1
+            fi
+          done
+          [[ "$fail" -eq 0 ]] || { echo "::error::Część endpointów nie odpowiada"; exit 1; }
+
+          echo "==> Smoke test zakończony powodzeniem"
+
+      - name: Sprzątanie klucza SSH
+        if: ${{ always() }}
+        run: rm -f ~/.ssh/smoke_key

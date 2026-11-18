@@ -1,5 +1,10 @@
 terraform {
   required_version = ">= 1.5"
+
+  # Zdalny state. Bucket i prefix podawane przy init, np.:
+  #   terraform init -backend-config="bucket=<BUCKET>" -backend-config="prefix=<PREFIX>"
+  backend "gcs" {}
+
   required_providers {
     google = {
       source  = "hashicorp/google"
